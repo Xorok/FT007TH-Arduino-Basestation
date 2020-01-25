@@ -1,3 +1,13 @@
+#include <Ethernet.h>
+#include <SD.h>
+#include <SPI.h>
+
+
+// Web server configuration
+static byte MAC[] = {0xDE, 0xAD, 0xBE, 0xEF, 0xFE, 0xED};
+static IPAddress IP(192,168,0,45);
+EthernetServer server(80);
+
 // 433Mhz receiver configuration
 static const unsigned int REC_RX_PIN = 2; // data input pin of the 433Mhz receiver
 
@@ -30,18 +40,95 @@ int   sensorBat[NUM_SENSORS] = {};
 
 void setup() {
   Serial.begin(115200);
+
+  // Disable SD SPI
+  pinMode(4, OUTPUT);
+  digitalWrite(4, HIGH);
+
+  // Disable w5100 SPI
+  pinMode(10, OUTPUT);
+  digitalWrite(10, HIGH);
+
+  if (!SD.begin(4)) {
+    Serial.println(F("ERROR - SD card initialization failed!"));
+    return;
+  }
+
+  if (!SD.exists(F("index.htm"))) {
+    Serial.println(F("ERROR - Can't find index.htm file!"));
+    return;
+  }
+
+  Ethernet.begin(MAC, IP);
+  server.begin(); // start to listen for clients
+
+  // Initialize 433Mhz receiver
   pinMode(REC_RX_PIN, INPUT);
 }
 
 
-// Main routines, find header, then get in sync with it, get a packet and decode data in it. Abort in case of errors.
 void loop() {
+  listenForEthernetClients();
+  
+  readSignal();
+}
+
+
+void listenForEthernetClients() {
+  EthernetClient client = server.available();
+
+  if (client) {
+    // an http request ends with a blank line
+    bool currentLineIsBlank = true;
+    while (client.connected()) {
+      if (client.available()) {
+        char c = client.read();
+        // if you've gotten to the end of the line (received a newline
+        // character) and the line is blank, the http request has ended,
+        // so you can send a reply
+        if (c == '\n' && currentLineIsBlank) {
+          // send a standard http response header
+          client.println(F("HTTP/1.1 200 OK"));
+          client.println(F("Content-Type: text/html; charset=utf-8"));
+          client.println();
+          // print the current readings, in HTML format:
+          for (int i = 0; i < NUM_SENSORS; i++) {
+            client.print(F("Sensor "));
+            client.print(i + 1);
+            client.print(F(": "));
+            client.print(sensorTemp[i]);
+            client.print(F("&#xB0;C / "));
+            client.print(sensorHum[i]);
+            client.println(F("%<br>"));
+          }
+          break;
+        }
+        if (c == '\n') {
+          // you're starting a new line
+          currentLineIsBlank = true;
+        } else if (c != '\r') {
+          // you've gotten a character on the current line
+          currentLineIsBlank = false;
+        }
+      }
+    }
+    // give the web browser time to receive the data
+    delay(1);
+    // close the connection:
+    client.stop();
+  }
+}
+
+
+// Main routines, find header, then get in sync with it, get a packet and decode data in it. Abort in case of errors.
+void readSignal() {
   if (errors || numBytes >= MAX_BYTES) {
     initVariables();
   }
 
-  while (digitalRead(REC_RX_PIN) != tempBit) {
+  if (digitalRead(REC_RX_PIN) != tempBit) {
     // Loop until a transition is found
+    return;
   }
 
   delayMicroseconds(SHORT_DELAY); // Skip ahead to 3/4 of the bit pattern
@@ -125,16 +212,16 @@ void initVariables() {
 }
 
 void printData() {
-  Serial.println("******************************");
+  Serial.println(F("******************************"));
   for (int i = 0; i < NUM_SENSORS; i++) {
-    Serial.print("Sensor Channel ");
+    Serial.print(F("Sensor Channel "));
     Serial.print(i + 1);
-    Serial.print(": ");
+    Serial.print(F(": "));
     Serial.print(sensorTemp[i], 1);
-    Serial.print("°C ");
+    Serial.print(F("°C "));
     Serial.print(sensorHum[i]);
-    Serial.print("% ");
+    Serial.print(F("% "));
     Serial.println(sensorBat[i]);
   }
-  Serial.println("******************************");
+  Serial.println(F("******************************"));
 }
