@@ -12,21 +12,21 @@ static IPAddress IP(192, 168, 0, 45);
 EthernetServer server(80);
 
 // 433Mhz receiver
-static const unsigned int REC_RX_PIN = 2; // data input pin of the 433Mhz receiver
+static const byte REC_RX_PIN = 2; // data input pin of the 433Mhz receiver
 
 // FT007TH sensors
-static const unsigned int NUM_SENSORS = 8; // 8 sensors/channels max
+static const byte NUM_SENSORS = 8; // 8 sensors/channels max
 
 // SD storage
-static const unsigned long saveIntervalMs = 10 * 60 * 1000UL; // 10 minutes
+static const unsigned long saveIntervalMs = 10UL * 60 * 1000; // 10 minutes
 
 // *************
 
-static const unsigned int SHORT_DELAY       =  242;
-static const unsigned int LONG_DELAY        =  484;
-static const unsigned int POLARITY          =    1;
-static const unsigned int NUM_HEADER_BITS   =   10;
-static const unsigned int MAX_BYTES         =    6;
+static const byte  SHORT_DELAY      =  242;
+static const short LONG_DELAY       =  484;
+static const byte  POLARITY         =    1;
+static const byte  NUM_HEADER_BITS  =   10;
+static const byte  MAX_BYTES        =    6;
 
 byte      tempBit;
 boolean   firstZero;
@@ -41,8 +41,12 @@ unsigned long previousSaveMs = 0;
 
 // Collected Sensor data
 float sensorTemp[NUM_SENSORS] = {};
-int   sensorHum[NUM_SENSORS] = {};
-int   sensorBat[NUM_SENSORS] = {};
+byte  sensorHum[NUM_SENSORS] = {};
+byte  sensorBat[NUM_SENSORS] = {};
+float sensorMinTemp = 30;
+float sensorMaxTemp = -30;
+byte  sensorMinHum  = 100;
+byte  sensorMaxHum  = 0;
 
 
 void setup() {
@@ -79,7 +83,7 @@ void setup() {
 void loop() {
   listenForEthernetClients();
 
-  readSensorSignals();
+  readSensorData();
 }
 
 
@@ -88,7 +92,7 @@ void listenForEthernetClients() {
 
   if (client) {
     // an http request ends with a blank line
-    bool currentLineIsBlank = true;
+    boolean currentLineIsBlank = true;
     while (client.connected()) {
       if (client.available()) {
         char c = client.read();
@@ -101,7 +105,7 @@ void listenForEthernetClients() {
           client.println(F("Content-Type: text/html; charset=utf-8"));
           client.println();
           // print the current readings, in HTML format:
-          for (int i = 0; i < NUM_SENSORS; i++) {
+          for (byte i = 0; i < NUM_SENSORS; i++) {
             client.print(F("Sensor "));
             client.print(i + 1);
             client.print(F(": "));
@@ -132,7 +136,7 @@ void listenForEthernetClients() {
 
 
 // Main routines, find header, then get in sync with it, get a packet and decode data in it. Abort in case of errors.
-void readSensorSignals() {
+void readSensorData() {
   if (errors || numBytes >= MAX_BYTES) {
     initVariables();
   }
@@ -194,11 +198,11 @@ void add(byte bitData) {
   }
 
   if (numBytes == MAX_BYTES) {
-    int ch = (manchester[3] & B01110000) / 16 + 1; // looks at 3 bits in byte 3 used to identify channels 1 to 8
-    int dataType = manchester[1]; // looks in byte 1 for the FT007th Ambient Thermo-Hygrometer code (0x45)
+    byte ch = (manchester[3] & B01110000) / 16 + 1; // looks at 3 bits in byte 3 used to identify channels 1 to 8
+    byte dataType = manchester[1]; // looks in byte 1 for the FT007th Ambient Thermo-Hygrometer code (0x45)
     float newTemp = float((manchester[3] & B00000111) * 256 + manchester[4] - 720) * 0.0556; // looks in bytes 3 and 4 for temperature and then converts to C
-    int newHum = manchester[5];
-    int lowBat = manchester[3] & 0x80 / 128;
+    byte newHum = manchester[5];
+    byte lowBat = manchester[3] & 0x80 / 128;
 
     if (dataType == 0x45) {
       if (ch > 0 && ch <= NUM_SENSORS) {
@@ -207,8 +211,15 @@ void add(byte bitData) {
         sensorBat[ch - 1] = lowBat;
       }
 
-      printData();
+      // Temporarily save min/max temperature and humidity
+      sensorMinTemp = (newTemp < sensorMinTemp) ? newTemp : sensorMinTemp;
+      sensorMaxTemp = (newTemp > sensorMaxTemp) ? newTemp : sensorMaxTemp;
+      sensorMinHum = (newHum < sensorMinHum) ? newHum : sensorMinHum;
+      sensorMaxHum = (newHum > sensorMaxHum) ? newHum : sensorMaxHum;
 
+      printDataToSerial();
+
+      // Periodically write measurements to SD
       unsigned long currentMs = millis();
       if (currentMs - previousSaveMs > saveIntervalMs) {
         previousSaveMs = currentMs;
@@ -223,7 +234,7 @@ void writeDataToSd(long currentMs) {
   String data = "";
 
   // Time,Channel,Temperature,Humidity,Battery
-  for (int i = 0; i < NUM_SENSORS; i++) {
+  for (byte i = 0; i < NUM_SENSORS; i++) {
     data += String(currentMs) + ',' + String(i + 1) + ',' + String(sensorTemp[i]) + ',' + String(sensorHum[i]) + ',' + String(sensorBat[i]) + '\n';
   }
 
@@ -238,9 +249,30 @@ void writeDataToSd(long currentMs) {
 }
 
 
-void printData() {
-  Serial.println(F("******************************"));
-  for (int i = 0; i < NUM_SENSORS; i++) {
+void printDataToSerial() {
+  Serial.println(F("**********************************"));
+  Serial.print(F("Min: "));
+  Serial.print(sensorMinTemp);
+  Serial.print(F("°C, "));
+  Serial.print(sensorMinHum);
+  Serial.println(F("%"));
+  Serial.print(F("Max: "));
+  Serial.print(sensorMaxTemp);
+  Serial.print(F("°C, "));
+  Serial.print(sensorMaxHum);
+  Serial.println(F("%"));
+  unsigned long currentMs = millis();
+  byte days = byte(currentMs/1000/60/60/24);
+  byte hours = byte(currentMs/1000/60/60 - days * 24);
+  byte minutes = byte(currentMs/1000/60 - days * 24 * 60 - hours * 60);
+  Serial.print(F("Uptime: "));
+  Serial.print(days);
+  Serial.print(" days, ");
+  Serial.print(hours);
+  Serial.print(" hours, ");
+  Serial.print(minutes);
+  Serial.println(" minutes");
+  for (byte i = 0; i < NUM_SENSORS; i++) {
     Serial.print(F("Sensor Channel "));
     Serial.print(i + 1);
     Serial.print(F(": "));
@@ -250,7 +282,7 @@ void printData() {
     Serial.print(F("% "));
     Serial.println(sensorBat[i]);
   }
-  Serial.println(F("******************************"));
+  Serial.println(F("**********************************"));
 }
 
 
