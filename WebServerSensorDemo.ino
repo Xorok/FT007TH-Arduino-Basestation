@@ -3,25 +3,31 @@
 #include <SPI.h>
 
 
-// Web server configuration
+// Configuration
+// *************
+
+// Web server
 static byte MAC[] = {0xDE, 0xAD, 0xBE, 0xEF, 0xFE, 0xED};
-static IPAddress IP(192,168,0,45);
+static IPAddress IP(192, 168, 0, 45);
 EthernetServer server(80);
 
-// 433Mhz receiver configuration
+// 433Mhz receiver
 static const unsigned int REC_RX_PIN = 2; // data input pin of the 433Mhz receiver
 
-// FT007TH sensors configuration
-static const unsigned int NUM_SENSORS       =    8; // 8 sensors/channels max
+// FT007TH sensors
+static const unsigned int NUM_SENSORS = 8; // 8 sensors/channels max
 
-// Sensor constants
+// SD storage
+static const unsigned long saveIntervalMs = 10 * 60 * 1000UL; // 10 minutes
+
+// *************
+
 static const unsigned int SHORT_DELAY       =  242;
 static const unsigned int LONG_DELAY        =  484;
 static const unsigned int POLARITY          =    1;
 static const unsigned int NUM_HEADER_BITS   =   10;
 static const unsigned int MAX_BYTES         =    6;
 
-// Sensor variables
 byte      tempBit;
 boolean   firstZero;
 byte      headerHits;
@@ -29,8 +35,9 @@ byte      dataByte;
 byte      numBits;
 byte      numBytes;
 byte      manchester[MAX_BYTES];
+boolean   errors;
 
-boolean errors = false; // flags if signal does not follow Manchester conventions
+unsigned long previousSaveMs = 0;
 
 // Collected Sensor data
 float sensorTemp[NUM_SENSORS] = {};
@@ -54,23 +61,25 @@ void setup() {
     return;
   }
 
-  if (!SD.exists(F("index.htm"))) {
+  /*if (!SD.exists(F("index.htm"))) {
     Serial.println(F("ERROR - Can't find index.htm file!"));
     return;
-  }
+    }*/
 
   Ethernet.begin(MAC, IP);
   server.begin(); // start to listen for clients
 
   // Initialize 433Mhz receiver
   pinMode(REC_RX_PIN, INPUT);
+
+  initVariables();
 }
 
 
 void loop() {
   listenForEthernetClients();
-  
-  readSignal();
+
+  readSensorSignals();
 }
 
 
@@ -99,7 +108,9 @@ void listenForEthernetClients() {
             client.print(sensorTemp[i]);
             client.print(F("&#xB0;C / "));
             client.print(sensorHum[i]);
-            client.println(F("%<br>"));
+            client.print(F("% / "));
+            client.print(sensorBat[i]);
+            client.println(F("<br>"));
           }
           break;
         }
@@ -121,7 +132,7 @@ void listenForEthernetClients() {
 
 
 // Main routines, find header, then get in sync with it, get a packet and decode data in it. Abort in case of errors.
-void readSignal() {
+void readSensorSignals() {
   if (errors || numBytes >= MAX_BYTES) {
     initVariables();
   }
@@ -195,21 +206,37 @@ void add(byte bitData) {
         sensorHum[ch - 1] = newHum;
         sensorBat[ch - 1] = lowBat;
       }
-    }
 
-    printData();
+      printData();
+
+      unsigned long currentMs = millis();
+      if (currentMs - previousSaveMs > saveIntervalMs) {
+        previousSaveMs = currentMs;
+        writeDataToSd(currentMs);
+      }
+    }
   }
 }
 
 
-void initVariables() {
-  tempBit = 1;
-  errors = false;
-  firstZero = false;
-  headerHits = 0;
-  numBits = 0;
-  numBytes = 0;
+void writeDataToSd(long currentMs) {
+  String data = "";
+
+  // Time,Channel,Temperature,Humidity,Battery
+  for (int i = 0; i < NUM_SENSORS; i++) {
+    data += String(currentMs) + ',' + String(i + 1) + ',' + String(sensorTemp[i]) + ',' + String(sensorHum[i]) + ',' + String(sensorBat[i]) + '\n';
+  }
+
+  File dataFile = SD.open(F("data.csv"), FILE_WRITE);
+
+  if (dataFile) {
+    dataFile.print(data);
+    dataFile.close();
+  } else {
+    Serial.println(F("Error opening data.csv"));
+  }
 }
+
 
 void printData() {
   Serial.println(F("******************************"));
@@ -224,4 +251,14 @@ void printData() {
     Serial.println(sensorBat[i]);
   }
   Serial.println(F("******************************"));
+}
+
+
+void initVariables() {
+  tempBit = 1;
+  errors = false;
+  firstZero = false;
+  headerHits = 0;
+  numBits = 0;
+  numBytes = 0;
 }
