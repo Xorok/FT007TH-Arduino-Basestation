@@ -61,30 +61,21 @@ void loop() {
 
   byte bitState = tempBit ^ POLARITY; //if POLARITY=1, invert the tempBit or if POLARITY=0, leave it alone.
 
-  if (bitState == 1) { //1 data could be header or packet
+  if (bitState == 1) {
     if (!firstZero) {
       headerHits++;
-      if (headerHits == NUM_HEADER_BITS) {
-        //valid header accepted, minimum required found
-        //Serial.print("H");
-      }
     } else {
-      add(bitState); //already seen first zero so add bit in
+      add(bitState);
     }
-  } else { //bitState==0 could first error, first zero or packet
-    // if it is header there must be no "zeroes" or errors
-
+  } else {
     if (headerHits < NUM_HEADER_BITS) {
-      // Still in header checking phase, more header hits required
       errors = true; // Landing here means header is corrupted, so it is probably an error
       return;
     }
-    
-    // We have our header, chewed up any excess and here is a zero
 
-    if (!firstZero) { //if first zero, it has not been found previously
+    if (!firstZero) {
       firstZero = true;
-      add(bitState); //Add zero to bytes
+      add(bitState);
       dataByte = B11111111;
       numBits = 7;
     } else {
@@ -97,16 +88,16 @@ void loop() {
 void add(byte bitData) {
   dataByte = (dataByte << 1) | bitData;
   numBits++;
-  
+
   if (numBits == 8) {
     numBits = 0;
     manchester[numBytes] = dataByte;
     numBytes++;
   }
-  
+
   if (numBytes == MAX_BYTES) {
     int ch = (manchester[3] & B01110000) / 16 + 1; // looks at 3 bits in byte 3 used to identify channels 1 to 8
-    int dataType = manchester[1]; // looks in byte 1 for the F007th Ambient Thermo-Hygrometer code (0x45)
+    int dataType = manchester[1]; // looks in byte 1 for the FT007th Ambient Thermo-Hygrometer code (0x45)
     float newTemp = float((manchester[3] & B00000111) * 256 + manchester[4] - 720) * 0.0556; // looks in bytes 3 and 4 for temperature and then converts to C
     int newHum = manchester[5];
     int lowBat = manchester[3] & 0x80 / 128;
@@ -119,18 +110,7 @@ void add(byte bitData) {
       }
     }
 
-    Serial.println("******************************");
-    for (int i = 0; i < NUM_SENSORS; i++) {
-      Serial.print("Sensor Channel ");
-      Serial.print(i + 1);
-      Serial.print(": ");
-      Serial.print(sensorTemp[i], 1);
-      Serial.print("°C ");
-      Serial.print(sensorHum[i], 0);
-      Serial.print("% / ");
-      Serial.println(sensorBat[i], 0);
-    }
-    Serial.println("******************************");
+    printData();
   }
 }
 
@@ -142,4 +122,19 @@ void initVariables() {
   headerHits = 0;
   numBits = 0;
   numBytes = 0;
+}
+
+void printData() {
+  Serial.println("******************************");
+  for (int i = 0; i < NUM_SENSORS; i++) {
+    Serial.print("Sensor Channel ");
+    Serial.print(i + 1);
+    Serial.print(": ");
+    Serial.print(sensorTemp[i], 1);
+    Serial.print("°C ");
+    Serial.print(sensorHum[i]);
+    Serial.print("% ");
+    Serial.println(sensorBat[i]);
+  }
+  Serial.println("******************************");
 }
